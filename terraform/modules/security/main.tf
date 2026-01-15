@@ -60,7 +60,7 @@ resource "aws_security_group" "eks_nodes" {
   # Ingress from other nodes (for node-to-node communication)
   ingress {
     from_port = 0
-    to_port   = 65535
+    to_port   = 0
     protocol  = "-1"
     self      = true
     description = "Allow traffic from other nodes"
