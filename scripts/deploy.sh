@@ -134,40 +134,15 @@ else
     print_status "AWS Load Balancer Controller installed"
 fi
 
-# Step 4: Build and Push Docker Image
+# Step 4: Verify Valhalla Image
 echo ""
-echo -e "${GREEN}Step 4: Building and Pushing Docker Image${NC}"
+echo -e "${GREEN}Step 4: Using Official Valhalla Image${NC}"
+print_status "Using ghcr.io/gis-ops/docker-valhalla/valhalla:latest"
+print_status "No custom image build required"
 
-# Login to ECR
-aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
-print_status "Logged in to ECR"
-
-# Build image
-cd app
-docker build -t valhalla-api:latest .
-print_status "Docker image built"
-
-# Tag and push
-docker tag valhalla-api:latest $ECR_REPO_URL:latest
-docker tag valhalla-api:latest $ECR_REPO_URL:$ENVIRONMENT-$(git rev-parse --short HEAD)
-docker push $ECR_REPO_URL:latest
-docker push $ECR_REPO_URL:$ENVIRONMENT-$(git rev-parse --short HEAD)
-print_status "Image pushed to ECR"
-
-cd ..
-
-# Step 5: Update Kustomization with ECR URL
+# Step 5: Deploy to Kubernetes
 echo ""
-echo -e "${GREEN}Step 5: Updating Kubernetes Manifests${NC}"
-
-# Update kustomization.yaml with actual ECR URL
-sed -i.bak "s|<AWS_ACCOUNT_ID>|$AWS_ACCOUNT_ID|g" k8s/overlays/$ENVIRONMENT/kustomization.yaml
-rm k8s/overlays/$ENVIRONMENT/kustomization.yaml.bak
-print_status "Kustomization updated with ECR URL"
-
-# Step 6: Deploy to Kubernetes
-echo ""
-echo -e "${GREEN}Step 6: Deploying to Kubernetes${NC}"
+echo -e "${GREEN}Step 5: Deploying to Kubernetes${NC}"
 
 # Apply manifests
 kubectl apply -k k8s/overlays/$ENVIRONMENT
@@ -179,9 +154,9 @@ kubectl wait --for=condition=available --timeout=300s deployment/valhalla-api -n
 
 print_status "Deployment ready"
 
-# Step 7: Verify Deployment
+# Step 6: Verify Deployment
 echo ""
-echo -e "${GREEN}Step 7: Verifying Deployment${NC}"
+echo -e "${GREEN}Step 6: Verifying Deployment${NC}"
 
 echo "Pods:"
 kubectl get pods -n valhalla
@@ -203,13 +178,13 @@ ALB_URL=$(kubectl get ingress valhalla-api -n valhalla -o jsonpath='{.status.loa
 if [ -n "$ALB_URL" ]; then
     print_status "Application Load Balancer: $ALB_URL"
     echo ""
-    echo "Testing health endpoint..."
-    curl -f http://$ALB_URL/health && print_status "Health check passed" || print_error "Health check failed"
+    echo "Testing status endpoint..."
+    curl -f http://$ALB_URL/status && print_status "Status check passed" || print_error "Status check failed"
 else
     print_warning "ALB URL not available yet. Check 'kubectl get ingress -n valhalla' in a few minutes"
 fi
 
-# Step 8: Summary
+# Step 7: Summary
 echo ""
 echo -e "${GREEN}=== Deployment Complete ===${NC}"
 echo ""

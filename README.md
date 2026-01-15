@@ -1,173 +1,277 @@
-# ⚔️ Valhalla - Production-Ready Web API Platform
+# Valhalla Routing Engine - DevOps Platform
 
-> A comprehensive DevOps showcase project demonstrating production-grade infrastructure, automation, and operational excellence on AWS.
+Production-ready Valhalla routing engine deployment on AWS EKS with complete DevOps automation.
 
-[![AWS](https://img.shields.io/badge/AWS-EKS-orange.svg)](https://aws.amazon.com/eks/)
-[![Terraform](https://img.shields.io/badge/IaC-Terraform-623CE4.svg)](https://www.terraform.io/)
-[![GitHub Actions](https://img.shields.io/badge/CI/CD-GitHub_Actions-2088FF.svg)](https://github.com/features/actions)
-[![Kubernetes](https://img.shields.io/badge/Platform-Kubernetes-326CE5.svg)](https://kubernetes.io/)
+## Project Overview
 
-## 📋 Overview
+This project deploys the [Valhalla routing engine](https://github.com/valhalla/valhalla) - an open-source routing and navigation engine that processes OpenStreetMap data to provide:
+- Turn-by-turn routing
+- Isochrones (time/distance polygons)
+- Map matching
+- Optimized route planning
+- Multiple travel modes (auto, bicycle, pedestrian)
 
-**Valhalla** is a business-critical web platform designed for:
-- High load capacity
-- Multiple deployments per day
-- 24/7 operation with 99.9% uptime SLA
+## Architecture
 
-This project demonstrates end-to-end DevOps capabilities including architecture design, infrastructure as code, CI/CD automation, observability, security, and incident response.
+### Infrastructure (AWS)
+- **EKS Cluster**: Managed Kubernetes 1.28
+- **VPC**: Multi-AZ across 3 availability zones
+- **NAT Gateways**: High availability networking
+- **Application Load Balancer**: HTTPS traffic management
+- **ECR**: Container registry (not used - using official image)
+- **CloudWatch**: Centralized logging and monitoring
+- **EBS**: Persistent storage for map tiles (50GB)
 
-## 🏗️ Architecture
+### Application
+- **Image**: `ghcr.io/gis-ops/docker-valhalla/valhalla:latest`
+- **Storage**: 50GB PersistentVolume for map tiles
+- **Sample Data**: Utrecht, Netherlands (~50MB)
+- **Autoscaling**: 2-10 pods based on CPU/Memory
+- **Resources**: 2Gi memory, 2 CPUs per pod
 
-Valhalla runs on **Amazon EKS (Elastic Kubernetes Service)** with a multi-AZ deployment for high availability.
-
-**Key Components:**
-- **Application**: Node.js Express REST API
-- **Infrastructure**: AWS VPC, EKS, ECR, ALB
-- **CI/CD**: GitHub Actions for automated build and deployment
-- **Monitoring**: CloudWatch Container Insights + Prometheus/Grafana
-- **Security**: AWS IAM, Secrets Manager, container scanning
-
-📐 [View detailed architecture documentation](docs/architecture.md)
-
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 
-- **Local Tools**: Node.js 18+, Docker, Terraform 1.5+, kubectl, AWS CLI v2
-- **AWS Account**: With appropriate IAM permissions
-- **GitHub**: Repository with Actions enabled
+```bash
+# Install required tools
+brew install terraform kubectl helm kustomize awscli
 
-### Local Development
+# Configure AWS credentials
+aws configure
+```
+
+### Deploy Infrastructure & Application
 
 ```bash
-# Clone the repository
-git clone <repository-url>
-cd valhalla-project
-
-# Run the application locally
-cd app
-npm install
-npm run dev
-
-# Run tests
-npm test
-
-# Build Docker image
-docker build -t valhalla-api .
-docker run -p 3000:3000 valhalla-api
+# One-command deployment
+./scripts/deploy.sh dev
 ```
 
-### Deploy Infrastructure
+This will:
+1. Deploy AWS infrastructure with Terraform (~20 minutes)
+2. Configure EKS cluster access
+3. Install AWS Load Balancer Controller
+4. Deploy Valhalla routing engine
+5. Verify deployment
+
+### Test Valhalla
 
 ```bash
-# Navigate to Terraform directory
-cd terraform/environments/dev
+# Get ALB URL
+kubectl get ingress -n valhalla
 
-# Initialize Terraform
-terraform init
-
-# Plan infrastructure changes
-terraform plan
-
-# Apply infrastructure
-terraform apply
+# Test routing
+curl http://<ALB_URL>/route \
+  --data '{
+    "locations": [
+      {"lat": 52.0907, "lon": 5.1214},
+      {"lat": 52.0938, "lon": 5.1182}
+    ],
+    "costing": "auto"
+  }' \
+  -H "Content-Type: application/json"
 ```
 
-### Deploy Application
-
-```bash
-# Configure kubectl
-aws eks update-kubeconfig --region us-east-1 --name valhalla-dev-cluster
-
-# Deploy to Kubernetes
-kubectl apply -k k8s/overlays/dev
-
-# Check deployment status
-kubectl get pods -n valhalla
-```
-
-## 📚 Documentation
-
-| Document | Description |
-|----------|-------------|
-| [Architecture](docs/architecture.md) | System design and AWS service choices |
-| [Architecture Decisions](docs/decisions.md) | ADRs for key technical decisions |
-| [CI/CD Pipeline](docs/cicd.md) | Build and deployment automation |
-| [Deployment Strategy](docs/deployment-strategy.md) | Zero-downtime deployment approach |
-| [Observability](docs/observability.md) | Monitoring, logging, and alerting |
-| [SLIs/SLOs](docs/slos.md) | Service level objectives and targets |
-| [Security](docs/security.md) | Security best practices and compliance |
-| [Backup & DR](docs/backup-dr.md) | Disaster recovery procedures |
-| [Incident Response](docs/incident-response.md) | Production incident handling |
-| [Cost Analysis](docs/cost-analysis.md) | AWS cost breakdown and optimization |
-| [Getting Started](docs/getting-started.md) | Detailed setup guide |
-
-## 📁 Project Structure
+## Project Structure
 
 ```
-valhalla-project/
-├── app/                    # Node.js Web API application
+.
 ├── terraform/              # Infrastructure as Code
-├── k8s/                    # Kubernetes manifests
-├── .github/workflows/      # CI/CD pipelines
-├── docs/                   # Documentation
-└── scripts/                # Helper scripts
+│   ├── modules/
+│   │   ├── networking/    # VPC, subnets, NAT gateways
+│   │   ├── security/      # Security groups
+│   │   ├── eks/           # EKS cluster and node groups
+│   │   └── ecr/           # Container registry (unused)
+│   └── environments/      # Dev/Staging/Prod configs
+├── k8s/                   # Kubernetes manifests
+│   ├── base/              # Base configuration
+│   └── overlays/          # Environment-specific overrides
+├── scripts/               # Automation scripts
+│   ├── deploy.sh         # Full deployment automation
+│   └── test.sh           # Deployment testing
+├── docs/                  # Documentation
+│   ├── architecture.md    # Architecture overview
+│   ├── decisions.md       # Architecture Decision Records
+│   ├── deployment.md      # Deployment guide
+│   └── valhalla-routing.md # Valhalla-specific docs
+└── .github/workflows/     # CI/CD pipelines
 ```
 
-## 🛠️ Technology Stack
+## Infrastructure Details
 
-- **Cloud**: AWS (EKS, VPC, ECR, ALB, CloudWatch)
-- **Infrastructure as Code**: Terraform
-- **Container Orchestration**: Kubernetes
-- **CI/CD**: GitHub Actions
-- **Application**: Node.js + Express
-- **Monitoring**: Prometheus, Grafana, CloudWatch
-- **Security**: AWS Secrets Manager, Trivy scanning
+### Networking
+- **VPC CIDR**: 10.0.0.0/16
+- **Public Subnets**: 3 (one per AZ) for ALB, NAT
+- **Private Subnets**: 3 (one per AZ) for EKS nodes
+- **NAT Gateways**: 1 (dev) or 3 (prod) for HA
 
-## 🎯 Project Deliverables
+### Compute
+- **EKS Version**: 1.28
+- **Node Instance**: t3.medium (dev), t3.large (prod)
+- **Node Count**: 3-6 (dev), 6-15 (prod)
+- **Auto-scaling**: Cluster Autoscaler enabled
 
-This project fulfills the following DevOps challenge requirements:
+### Security
+- **IAM Roles**: Cluster, node groups, IRSA ready
+- **Security Groups**: Least-privilege rules
+- **Encryption**: EBS volumes, secrets at rest
+- **Network Policies**: Pod-to-pod isolation
 
-1. ✅ **Architecture & Infrastructure** - Multi-AZ EKS cluster design
-2. ✅ **Infrastructure as Code** - Complete Terraform modules
-3. ✅ **CI/CD & Deployment** - Automated GitHub Actions pipelines
-4. ✅ **Observability & Operations** - Full monitoring stack with SLOs
-5. ✅ **Security & Reliability** - IAM, RBAC, secrets management, DR plan
-6. ✅ **Incident Simulation** - Detailed response playbook
+## Valhalla Configuration
 
-## 📊 Key Features
+### Current Setup
+- **Map Data**: Utrecht, Netherlands (sample)
+- **Replicas**: 2 (dev), 6 (prod)
+- **Resources**: 2Gi RAM, 2 CPU per pod
+- **Storage**: 50GB PVC (gp3)
 
-- **High Availability**: Multi-AZ deployment with automatic failover
-- **Auto-scaling**: Horizontal Pod Autoscaler based on CPU/memory
-- **Zero-Downtime Deployment**: Rolling updates with health checks
-- **Security**: Container scanning, secrets encryption, network policies
-- **Observability**: Real-time metrics, logs, and distributed tracing
-- **Disaster Recovery**: Automated backups with documented RTO/RPO
+### API Endpoints
 
-## 🔐 Security
+```bash
+# Health check
+GET /status
 
-- IAM roles with least-privilege access
-- Kubernetes RBAC policies
-- Container image scanning (Trivy)
-- AWS Secrets Manager for sensitive data
-- Network policies for pod-to-pod communication
-- Encrypted EBS volumes and S3 buckets
+# Routing
+POST /route
+{
+  "locations": [{"lat": 52.09, "lon": 5.12}, {"lat": 52.10, "lon": 5.11}],
+  "costing": "auto"
+}
 
-## 📈 Monitoring & Alerting
+# Isochrone
+POST /isochrone
+{
+  "locations": [{"lat": 52.09, "lon": 5.12}],
+  "costing": "auto",
+  "contours": [{"time": 10}, {"time": 20}]
+}
 
-- **Latency**: p95 < 200ms, p99 < 500ms
-- **Error Rate**: < 1% of requests
-- **Availability**: 99.9% uptime SLA
-- **Alerts**: PagerDuty integration for critical issues
+# Map matching
+POST /trace_route
+{
+  "shape": [{"lat": 52.09, "lon": 5.12}, {"lat": 52.10, "lon": 5.11}],
+  "costing": "auto"
+}
+```
 
-## 🤝 Contributing
+## Deployment Environments
 
-This is a showcase project. For improvements or suggestions, please open an issue.
+| Environment | Replicas | Storage | Instance Type | Auto-Deploy |
+|-------------|----------|---------|---------------|-------------|
+| **Dev** | 2-10 | 50GB | t3.medium | On push |
+| **Staging** | 3-15 | 100GB | t3.large | On merge |
+| **Production** | 6-30 | 200GB | t3.large | Manual |
 
-## 📝 License
+## Cost Estimates
 
-This project is for educational and demonstration purposes.
+### Dev Environment (~$400/month)
+- EKS cluster: $72
+- EC2 nodes (3 × t3.medium): $90
+- NAT Gateway (1): $35
+- ALB: $20
+- EBS storage (150GB): $15
+- Data transfer: ~$20
+
+### Production (~$1,500/month)
+- EKS cluster: $72
+- EC2 nodes (6 × t3.large): $360
+- NAT Gateways (3): $105
+- ALB: $20
+- EBS storage (600GB): $60
+- Data transfer: ~$100
+
+## Monitoring & Operations
+
+### Logs
+```bash
+# View Valhalla logs
+kubectl logs -n valhalla -l app=valhalla-api -f
+
+# View init container logs (map download)
+kubectl logs -n valhalla <pod> -c download-tiles
+```
+
+### Scaling
+```bash
+# Manual scale
+kubectl scale deployment valhalla-api -n valhalla --replicas=5
+
+# View HPA status
+kubectl get hpa -n valhalla
+```
+
+### Updates
+```bash
+# Update to new Valhalla version
+kubectl set image deployment/valhalla-api \
+  valhalla=ghcr.io/gis-ops/docker-valhalla/valhalla:v3.2.0 \
+  -n valhalla
+
+# Rollback
+kubectl rollout undo deployment/valhalla-api -n valhalla
+```
+
+## CI/CD Pipeline
+
+### GitHub Actions Workflows
+- **CI**: Tests, validation, security scanning
+- **CD**: Automated deployment to environments
+
+### Deployment Flow
+1. Push code → CI validates
+2. Merge to main → Deploy to staging
+3. Manual trigger → Deploy to production
+
+## Documentation
+
+- [Architecture Overview](docs/architecture.md)
+- [Architecture Decisions (ADRs)](docs/decisions.md)
+- [Deployment Guide](docs/deployment.md)
+- [Valhalla Routing Guide](docs/valhalla-routing.md)
+
+## Map Data Management
+
+### Using Custom Regions
+
+1. Download OSM data from [Geofabrik](https://download.geofabrik.de/)
+2. Build tiles with Valhalla
+3. Upload to S3
+4. Update init container to download from S3
+
+See [Valhalla Routing Guide](docs/valhalla-routing.md) for details.
+
+## Cleanup
+
+```bash
+# Delete Kubernetes resources
+kubectl delete -k k8s/overlays/dev
+
+# Destroy infrastructure
+cd terraform
+terraform destroy -var-file="environments/dev/terraform.tfvars"
+```
+
+## Testing
+
+```bash
+# Run comprehensive tests
+./scripts/test.sh dev
+```
+
+## Support
+
+For issues:
+1. Check pod logs: `kubectl logs -n valhalla -l app=valhalla-api`
+2. Check events: `kubectl get events -n valhalla`
+3. Review documentation in `docs/`
+
+## License
+
+This infrastructure code is provided as-is for the DevOps take-home challenge.
+
+Valhalla routing engine: [Valhalla License](https://github.com/valhalla/valhalla/blob/master/LICENSE.md)
 
 ---
 
-**Built with ❤️ for DevOps Excellence**
+**Built with**: Terraform, Kubernetes, AWS EKS, Valhalla Routing Engine
