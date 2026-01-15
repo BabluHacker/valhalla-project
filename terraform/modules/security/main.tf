@@ -113,7 +113,7 @@ resource "aws_security_group" "eks_cluster" {
   # Egress to nodes
   egress {
     from_port   = 0
-    to_port     = 65535
+    to_port     = 0
     protocol    = "-1"
     security_groups = [aws_security_group.eks_nodes.id]
     description = "Allow traffic to worker nodes"
