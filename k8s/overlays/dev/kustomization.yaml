@@ -9,16 +9,13 @@ bases:
 commonLabels:
   environment: dev
 
-images:
-- name: valhalla-api
-  newName: <AWS_ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/valhalla-dev-valhalla-api
-  newTag: latest
+# Using official Valhalla image
+# No custom image build needed
 
 replicas:
 - name: valhalla-api
-  count: 3
+  count: 2
 
 patchesStrategicMerge:
 - deployment-patch.yaml
 - ingress-patch.yaml
-- configmap-patch.yaml

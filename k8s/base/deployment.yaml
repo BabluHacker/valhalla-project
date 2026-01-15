@@ -23,66 +23,80 @@ spec:
         version: v1
       annotations:
         prometheus.io/scrape: "true"
-        prometheus.io/port: "3000"
+        prometheus.io/port: "8002"
         prometheus.io/path: "/metrics"
     spec:
       serviceAccountName: valhalla-api
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 1001
-        fsGroup: 1001
+        fsGroup: 1000
+      initContainers:
+      - name: download-tiles
+        image: alpine:latest
+        command:
+        - sh
+        - -c
+        - |
+          if [ ! -f /data/valhalla_tiles.tar ]; then
+            echo "Downloading sample map data (Monaco - small dataset)..."
+            apk add --no-cache wget
+            wget -O /data/valhalla_tiles.tar https://raw.githubusercontent.com/valhalla/valhalla/master/test/data/utrecht_tiles.tar
+            cd /data && tar xf valhalla_tiles.tar
+            echo "Map data downloaded and extracted"
+          else
+            echo "Map data already exists, skipping download"
+          fi
+        volumeMounts:
+        - name: valhalla-data
+          mountPath: /data
       containers:
-      - name: api
-        image: valhalla-api:latest
+      - name: valhalla
+        image: ghcr.io/gis-ops/docker-valhalla/valhalla:latest
         imagePullPolicy: Always
         ports:
         - name: http
-          containerPort: 3000
+          containerPort: 8002
           protocol: TCP
         env:
-        - name: NODE_ENV
-          value: "production"
-        - name: PORT
-          value: "3000"
-        - name: LOG_LEVEL
-          valueFrom:
-            configMapKeyRef:
-              name: valhalla-api-config
-              key: log_level
-        envFrom:
-        - configMapRef:
-            name: valhalla-api-config
+        - name: serve_tiles
+          value: "True"
+        - name: use_tiles_ignore_pbf
+          value: "True"
+        - name: build_elevation
+          value: "False"
+        - name: build_admins
+          value: "False"
+        - name: build_time_zones
+          value: "False"
+        volumeMounts:
+        - name: valhalla-data
+          mountPath: /custom_files
         resources:
           requests:
-            cpu: 100m
-            memory: 128Mi
-          limits:
             cpu: 500m
-            memory: 512Mi
+            memory: 1Gi
+          limits:
+            cpu: 2000m
+            memory: 4Gi
         livenessProbe:
           httpGet:
-            path: /health
+            path: /status
             port: http
-          initialDelaySeconds: 30
+          initialDelaySeconds: 60
           periodSeconds: 10
-          timeoutSeconds: 3
+          timeoutSeconds: 5
           failureThreshold: 3
         readinessProbe:
           httpGet:
-            path: /ready
+            path: /status
             port: http
-          initialDelaySeconds: 10
+          initialDelaySeconds: 30
           periodSeconds: 5
-          timeoutSeconds: 3
+          timeoutSeconds: 5
           failureThreshold: 3
-        securityContext:
-          allowPrivilegeEscalation: false
-          readOnlyRootFilesystem: true
-          runAsNonRoot: true
-          runAsUser: 1001
-          capabilities:
-            drop:
-            - ALL
+      volumes:
+      - name: valhalla-data
+        persistentVolumeClaim:
+          claimName: valhalla-data
       affinity:
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
