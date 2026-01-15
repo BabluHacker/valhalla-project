@@ -14,20 +14,21 @@ This project deploys the [Valhalla routing engine](https://github.com/valhalla/v
 ## Architecture
 
 ### Infrastructure (AWS)
-- **EKS Cluster**: Managed Kubernetes 1.28
+- **EKS Cluster**: Managed Kubernetes 1.29
 - **VPC**: Multi-AZ across 3 availability zones
 - **NAT Gateways**: High availability networking
-- **Application Load Balancer**: HTTPS traffic management
-- **ECR**: Container registry (not used - using official image)
+- **Network Load Balancer**: Public internet access
+- **ECR**: Container registry (created but unused - using official image)
 - **CloudWatch**: Centralized logging and monitoring
-- **EBS**: Persistent storage for map tiles (50GB)
+- **EBS**: Persistent storage for map tiles (50GB gp2)
 
 ### Application
 - **Image**: `ghcr.io/gis-ops/docker-valhalla/valhalla:latest`
-- **Storage**: 50GB PersistentVolume for map tiles
-- **Sample Data**: Utrecht, Netherlands (~50MB)
-- **Autoscaling**: 2-10 pods based on CPU/Memory
-- **Resources**: 2Gi memory, 2 CPUs per pod
+- **Version**: 3.5.1
+- **Storage**: 50GB PersistentVolume with gp2 storage class
+- **Sample Data**: Monaco (~1MB) - smallest test dataset
+- **Autoscaling**: 2-20 pods based on CPU/Memory (HPA)
+- **Resources**: 512Mi-2Gi memory, 250m-1 CPU per pod (dev)
 
 ## Quick Start
 
@@ -58,19 +59,25 @@ This will:
 ### Test Valhalla
 
 ```bash
-# Get ALB URL
-kubectl get ingress -n valhalla
+# Get public LoadBalancer URL
+kubectl get svc valhalla-api-lb -n valhalla
 
-# Test routing
-curl http://<ALB_URL>/route \
+# Or use the deployed URL
+export VALHALLA_URL="http://k8s-valhalla-valhalla-f7f06e7694-96790d154369cade.elb.us-east-1.amazonaws.com"
+
+# Test routing (Monaco coordinates)
+curl $VALHALLA_URL/route \
   --data '{
     "locations": [
-      {"lat": 52.0907, "lon": 5.1214},
-      {"lat": 52.0938, "lon": 5.1182}
+      {"lat": 43.7384, "lon": 7.4246},
+      {"lat": 43.7311, "lon": 7.4197}
     ],
-    "costing": "auto"
+    "costing": "auto",
+    "directions_options": {"units": "kilometers"}
   }' \
   -H "Content-Type: application/json"
+
+# Expected: 2.49km route in ~3.5 minutes
 ```
 
 ## Project Structure
@@ -107,10 +114,11 @@ curl http://<ALB_URL>/route \
 - **NAT Gateways**: 1 (dev) or 3 (prod) for HA
 
 ### Compute
-- **EKS Version**: 1.28
+- **EKS Version**: 1.29
 - **Node Instance**: t3.medium (dev), t3.large (prod)
-- **Node Count**: 3-6 (dev), 6-15 (prod)
+- **Node Count**: 3 (dev), 6-15 (prod)
 - **Auto-scaling**: Cluster Autoscaler enabled
+- **Metrics Server**: Installed for HPA
 
 ### Security
 - **IAM Roles**: Cluster, node groups, IRSA ready
@@ -121,10 +129,11 @@ curl http://<ALB_URL>/route \
 ## Valhalla Configuration
 
 ### Current Setup
-- **Map Data**: Utrecht, Netherlands (sample)
-- **Replicas**: 2 (dev), 6 (prod)
-- **Resources**: 2Gi RAM, 2 CPU per pod
-- **Storage**: 50GB PVC (gp3)
+- **Map Data**: Monaco (~1MB) - smallest real dataset
+- **Coverage**: Monaco city (43.73-43.75°N, 7.40-7.44°E)
+- **Replicas**: 2-20 (dev with HPA), 6-30 (prod)
+- **Resources**: 512Mi-2Gi RAM, 250m-1 CPU per pod (dev)
+- **Storage**: 50GB PVC (gp2)
 
 ### API Endpoints
 
@@ -132,17 +141,18 @@ curl http://<ALB_URL>/route \
 # Health check
 GET /status
 
-# Routing
+# Routing (Monaco coordinates)
 POST /route
 {
-  "locations": [{"lat": 52.09, "lon": 5.12}, {"lat": 52.10, "lon": 5.11}],
-  "costing": "auto"
+  "locations": [{"lat": 43.7384, "lon": 7.4246}, {"lat": 43.7311, "lon": 7.4197}],
+  "costing": "auto",
+  "directions_options": {"units": "kilometers"}
 }
 
 # Isochrone
 POST /isochrone
 {
-  "locations": [{"lat": 52.09, "lon": 5.12}],
+  "locations": [{"lat": 43.7384, "lon": 7.4246}],
   "costing": "auto",
   "contours": [{"time": 10}, {"time": 20}]
 }
@@ -150,7 +160,7 @@ POST /isochrone
 # Map matching
 POST /trace_route
 {
-  "shape": [{"lat": 52.09, "lon": 5.12}, {"lat": 52.10, "lon": 5.11}],
+  "shape": [{"lat": 43.7384, "lon": 7.4246}, {"lat": 43.7311, "lon": 7.4197}],
   "costing": "auto"
 }
 ```
@@ -225,21 +235,36 @@ kubectl rollout undo deployment/valhalla-api -n valhalla
 
 ## Documentation
 
-- [Architecture Overview](docs/architecture.md)
-- [Architecture Decisions (ADRs)](docs/decisions.md)
-- [Deployment Guide](docs/deployment.md)
-- [Valhalla Routing Guide](docs/valhalla-routing.md)
+- [Architecture Overview](docs/architecture.md) - AWS infrastructure design
+- [Architecture Decisions (ADRs)](docs/decisions.md) - Key technical decisions
+- [Deployment Guide](docs/deployment.md) - Step-by-step deployment
+- [Getting Started Guide](docs/getting-started.md) - Quick start tutorial
+- [Valhalla Routing Guide](docs/valhalla-routing.md) - Routing engine details
+- [Monitoring Guide](docs/monitoring.md) - Observability setup
 
 ## Map Data Management
+
+### Current Data: Monaco
+
+**Coverage:**
+- Region: Monaco (smallest country)
+- Size: ~1MB OSM data
+- Coordinates: 43.73-43.75°N, 7.40-7.44°E
+- Perfect for testing and demos
 
 ### Using Custom Regions
 
 1. Download OSM data from [Geofabrik](https://download.geofabrik.de/)
-2. Build tiles with Valhalla
-3. Upload to S3
-4. Update init container to download from S3
+2. Build tiles: `valhalla_build_tiles -c config.json data.osm.pbf`
+3. Upload to S3 or include in init container
+4. Update `k8s/base/deployment.yaml` init container
 
-See [Valhalla Routing Guide](docs/valhalla-routing.md) for details.
+**Popular regions:**
+- City: Amsterdam (~100MB), Berlin (~200MB)
+- Country: Netherlands (~500MB), Germany (~3GB)
+- Continent: Europe (~25GB)
+
+See [Valhalla Routing Guide](docs/valhalla-routing.md) for detailed instructions.
 
 ## Cleanup
 
