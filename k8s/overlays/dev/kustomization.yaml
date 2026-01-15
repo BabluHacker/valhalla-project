@@ -3,19 +3,24 @@ kind: Kustomization
 
 namespace: valhalla
 
-bases:
+resources:
 - ../../base
 
 commonLabels:
   environment: dev
 
-# Using official Valhalla image
-# No custom image build needed
+# Using official Valhalla image - no custom image build needed
 
 replicas:
 - name: valhalla-api
   count: 2
 
-patchesStrategicMerge:
-- deployment-patch.yaml
-- ingress-patch.yaml
+patches:
+- path: deployment-patch.yaml
+  target:
+    kind: Deployment
+    name: valhalla-api
+- path: ingress-patch.yaml
+  target:
+    kind: Ingress
+    name: valhalla-api
