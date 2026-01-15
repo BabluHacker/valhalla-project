@@ -32,3 +32,23 @@ module "security" {
   vpc_id       = module.networking.vpc_id
   tags         = var.tags
 }
+
+module "eks" {
+  source = "./modules/eks"
+
+  environment                = var.environment
+  project_name              = var.project_name
+  vpc_id                    = module.networking.vpc_id
+  private_subnet_ids        = module.networking.private_subnet_ids
+  cluster_security_group_id = module.security.eks_cluster_security_group_id
+  nodes_security_group_id   = module.security.eks_nodes_security_group_id
+  tags                      = var.tags
+}
+
+module "ecr" {
+  source = "./modules/ecr"
+
+  environment  = var.environment
+  project_name = var.project_name
+  tags         = var.tags
+}

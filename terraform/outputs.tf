@@ -42,3 +42,35 @@ output "eks_nodes_security_group_id" {
   description = "ID of the EKS nodes security group"
   value       = module.security.eks_nodes_security_group_id
 }
+
+# EKS Outputs
+output "eks_cluster_name" {
+  description = "Name of the EKS cluster"
+  value       = module.eks.cluster_name
+}
+
+output "eks_cluster_endpoint" {
+  description = "Endpoint for EKS cluster"
+  value       = module.eks.cluster_endpoint
+}
+
+output "eks_cluster_version" {
+  description = "Kubernetes version of the cluster"
+  value       = module.eks.cluster_version
+}
+
+output "eks_oidc_provider_arn" {
+  description = "ARN of the OIDC provider"
+  value       = module.eks.oidc_provider_arn
+}
+
+output "kubectl_config_command" {
+  description = "Command to configure kubectl"
+  value       = module.eks.kubectl_config
+}
+
+# ECR Outputs
+output "ecr_repository_urls" {
+  description = "Map of ECR repository URLs"
+  value       = module.ecr.repository_urls
+}
