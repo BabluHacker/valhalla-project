@@ -1,0 +1,7 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: valhalla-api
+spec:
+  minReplicas: 6
+  maxReplicas: 30

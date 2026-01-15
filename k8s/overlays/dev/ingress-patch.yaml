@@ -1,0 +1,18 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: valhalla-api
+  annotations:
+    alb.ingress.kubernetes.io/tags: Environment=dev,Project=valhalla,CostCenter=Engineering
+spec:
+  rules:
+  - host: api-dev.valhalla.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: valhalla-api
+            port:
+              number: 80

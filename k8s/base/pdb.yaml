@@ -1,0 +1,12 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: valhalla-api
+  namespace: valhalla
+  labels:
+    app: valhalla-api
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: valhalla-api

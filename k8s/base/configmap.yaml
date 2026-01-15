@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: valhalla-api-config
+  namespace: valhalla
+  labels:
+    app: valhalla-api
+data:
+  log_level: "info"
+  app_name: "Valhalla API"
+  app_version: "1.0.0"

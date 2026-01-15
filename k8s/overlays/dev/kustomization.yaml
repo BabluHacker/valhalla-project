@@ -1,0 +1,24 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: valhalla
+
+bases:
+- ../../base
+
+commonLabels:
+  environment: dev
+
+images:
+- name: valhalla-api
+  newName: <AWS_ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/valhalla-dev-valhalla-api
+  newTag: latest
+
+replicas:
+- name: valhalla-api
+  count: 3
+
+patchesStrategicMerge:
+- deployment-patch.yaml
+- ingress-patch.yaml
+- configmap-patch.yaml

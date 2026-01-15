@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: valhalla-api-config
+data:
+  log_level: "debug"
+  app_name: "Valhalla API - Dev"

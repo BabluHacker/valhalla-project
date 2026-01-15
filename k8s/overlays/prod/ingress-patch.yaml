@@ -1,0 +1,20 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: valhalla-api
+  annotations:
+    alb.ingress.kubernetes.io/tags: Environment=prod,Project=valhalla,CostCenter=Engineering,Criticality=High
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:ACCOUNT_ID:certificate/CERT_ID
+    alb.ingress.kubernetes.io/wafv2-acl-arn: arn:aws:wafv2:us-east-1:ACCOUNT_ID:regional/webacl/NAME/ID
+spec:
+  rules:
+  - host: api.valhalla.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: valhalla-api
+            port:
+              number: 80

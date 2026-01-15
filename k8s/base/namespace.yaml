@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: valhalla
+  labels:
+    name: valhalla
+    istio-injection: disabled
