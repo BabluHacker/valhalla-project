@@ -36,7 +36,8 @@ spec:
         - sh
         - -c
         - |
-          if [ ! -d /custom_files/valhalla_tiles ]; then
+          # Check if tiles actually exist (not just empty directory)
+          if [ ! -f /custom_files/valhalla_tiles.tar ] && [ ! -d /custom_files/valhalla_tiles ] || [ -z "$(ls -A /custom_files/valhalla_tiles 2>/dev/null)" ]; then
             echo "Downloading Monaco OSM data (smallest dataset ~1MB)..."
             cd /custom_files
             curl -L -o monaco.osm.pbf https://download.geofabrik.de/europe/monaco-latest.osm.pbf
@@ -47,6 +48,7 @@ spec:
             ls -lh /custom_files/valhalla_tiles/
           else
             echo "Tiles already exist, skipping build"
+            ls -lh /custom_files/valhalla_tiles/
           fi
         volumeMounts:
         - name: valhalla-data
