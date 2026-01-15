@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Valhalla Deployment Script
-# This script deploys infrastructure and application to AWS
+# This script deploys infrastructure and Valhalla routing engine to AWS
 
 set -e
 
@@ -40,7 +40,7 @@ echo "Checking prerequisites..."
 command -v aws >/dev/null 2>&1 || { print_error "AWS CLI is required but not installed. Aborting."; exit 1; }
 command -v terraform >/dev/null 2>&1 || { print_error "Terraform is required but not installed. Aborting."; exit 1; }
 command -v kubectl >/dev/null 2>&1 || { print_error "kubectl is required but not installed. Aborting."; exit 1; }
-command -v docker >/dev/null 2>&1 || { print_error "Docker is required but not installed. Aborting."; exit 1; }
+command -v helm >/dev/null 2>&1 || { print_error "Helm is required but not installed. Aborting."; exit 1; }
 
 print_status "All prerequisites installed"
 
@@ -83,12 +83,10 @@ terraform apply tfplan
 # Get outputs
 VPC_ID=$(terraform output -raw vpc_id)
 EKS_CLUSTER_NAME=$(terraform output -raw eks_cluster_name)
-ECR_REPO_URL=$(terraform output -json ecr_repository_urls | jq -r '.["valhalla-api"]')
 
 print_status "Infrastructure deployed successfully"
 print_status "VPC ID: $VPC_ID"
 print_status "EKS Cluster: $EKS_CLUSTER_NAME"
-print_status "ECR Repository: $ECR_REPO_URL"
 
 cd ..
 
@@ -112,15 +110,6 @@ if kubectl get deployment -n kube-system aws-load-balancer-controller >/dev/null
 else
     echo "Installing AWS Load Balancer Controller..."
     
-    # Create IAM policy if doesn't exist
-    if ! aws iam get-policy --policy-arn arn:aws:iam::$AWS_ACCOUNT_ID:policy/AWSLoadBalancerControllerIAMPolicy >/dev/null 2>&1; then
-        curl -o iam_policy.json https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v2.7.0/docs/install/iam_policy.json
-        aws iam create-policy \
-            --policy-name AWSLoadBalancerControllerIAMPolicy \
-            --policy-document file://iam_policy.json
-        rm iam_policy.json
-    fi
-    
     # Install using Helm
     helm repo add eks https://aws.github.io/eks-charts
     helm repo update
@@ -131,28 +120,50 @@ else
         --set region=$AWS_REGION \
         --set vpcId=$VPC_ID
     
+    # Wait for deployment
+    echo "Waiting for ALB controller to be ready..."
+    kubectl wait --for=condition=available --timeout=120s deployment/aws-load-balancer-controller -n kube-system
+    
     print_status "AWS Load Balancer Controller installed"
 fi
 
-# Step 4: Verify Valhalla Image
+# Step 4: Install Metrics Server
 echo ""
-echo -e "${GREEN}Step 4: Using Official Valhalla Image${NC}"
-print_status "Using ghcr.io/gis-ops/docker-valhalla/valhalla:latest"
-print_status "No custom image build required"
+echo -e "${GREEN}Step 4: Installing Metrics Server${NC}"
 
-# Step 5: Deploy to Kubernetes
+if kubectl get deployment -n kube-system metrics-server >/dev/null 2>&1; then
+    print_status "Metrics Server already installed"
+else
+    echo "Installing Metrics Server..."
+    kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+    
+    # Wait for deployment
+    echo "Waiting for Metrics Server to be ready..."
+    kubectl wait --for=condition=available --timeout=120s deployment/metrics-server -n kube-system
+    
+    print_status "Metrics Server installed"
+fi
+
+# Step 5: Deploy Valhalla Routing Engine
 echo ""
-echo -e "${GREEN}Step 5: Deploying to Kubernetes${NC}"
+echo -e "${GREEN}Step 5: Deploying Valhalla Routing Engine${NC}"
+print_status "Using official ghcr.io/gis-ops/docker-valhalla/valhalla:latest"
 
 # Apply manifests
 kubectl apply -k k8s/overlays/$ENVIRONMENT
 print_status "Kubernetes manifests applied"
 
 # Wait for deployment
-echo "Waiting for deployment to be ready..."
-kubectl wait --for=condition=available --timeout=300s deployment/valhalla-api -n valhalla
+echo "Waiting for Valhalla pods to be ready (this may take 2-3 minutes)..."
+echo "Init container will download map data on first deployment..."
+kubectl wait --for=condition=available --timeout=300s deployment/valhalla-api -n valhalla || {
+    print_warning "Deployment did not become ready within 5 minutes"
+    echo "Checking pod status..."
+    kubectl get pods -n valhalla
+    kubectl describe pod -n valhalla -l app=valhalla-api
+}
 
-print_status "Deployment ready"
+print_status "Valhalla deployment ready"
 
 # Step 6: Verify Deployment
 echo ""
@@ -169,17 +180,37 @@ echo ""
 echo "Ingress:"
 kubectl get ingress -n valhalla
 
+echo ""
+echo "PersistentVolumeClaim:"
+kubectl get pvc -n valhalla
+
 # Get ALB URL
 echo ""
-echo "Waiting for ALB to be provisioned (this may take a few minutes)..."
-sleep 30
+echo "Waiting for ALB to be provisioned (this may take 2-3 minutes)..."
+sleep 60
 
-ALB_URL=$(kubectl get ingress valhalla-api -n valhalla -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+ALB_URL=$(kubectl get ingress valhalla-api -n valhalla -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
+
 if [ -n "$ALB_URL" ]; then
     print_status "Application Load Balancer: $ALB_URL"
     echo ""
     echo "Testing status endpoint..."
-    curl -f http://$ALB_URL/status && print_status "Status check passed" || print_error "Status check failed"
+    
+    # Try status check with retry
+    for i in {1..5}; do
+        if curl -f -s http://$ALB_URL/status > /dev/null 2>&1; then
+            print_status "Status check passed"
+            break
+        else
+            if [ $i -lt 5 ]; then
+                echo "Attempt $i failed, retrying in 30 seconds..."
+                sleep 30
+            else
+                print_warning "Status check failed after 5 attempts"
+                echo "ALB may still be warming up. Try manually: curl http://$ALB_URL/status"
+            fi
+        fi
+    done
 else
     print_warning "ALB URL not available yet. Check 'kubectl get ingress -n valhalla' in a few minutes"
 fi
@@ -197,7 +228,21 @@ echo "  kubectl get pods -n valhalla"
 echo "  kubectl logs -n valhalla -l app=valhalla-api --tail=100 -f"
 echo "  kubectl get ingress -n valhalla"
 echo ""
-echo "To access the application:"
-echo "  curl http://$ALB_URL/health"
-echo "  curl http://$ALB_URL/api/v1/status"
+
+if [ -n "$ALB_URL" ]; then
+    echo "To access Valhalla routing engine:"
+    echo "  Health: curl http://$ALB_URL/status"
+    echo ""
+    echo "  Route: curl http://$ALB_URL/route \\"
+    echo "    --data '{\"locations\":[{\"lat\":52.09,\"lon\":5.12},{\"lat\":52.10,\"lon\":5.11}],\"costing\":\"auto\"}' \\"
+    echo "    -H 'Content-Type: application/json'"
+    echo ""
+    echo "  Isochrone: curl http://$ALB_URL/isochrone \\"
+    echo "    --data '{\"locations\":[{\"lat\":52.09,\"lon\":5.12}],\"costing\":\"auto\",\"contours\":[{\"time\":10}]}' \\"
+    echo "    -H 'Content-Type: application/json'"
+else
+    echo "Run 'kubectl get ingress -n valhalla' to get the ALB URL once it's ready"
+fi
+
 echo ""
+print_status "Deployment completed successfully!"
