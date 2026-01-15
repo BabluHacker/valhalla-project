@@ -54,20 +54,22 @@ print_status "AWS Account ID: $AWS_ACCOUNT_ID"
 # Step 1: Deploy Infrastructure
 echo ""
 echo -e "${GREEN}Step 1: Deploying Infrastructure with Terraform${NC}"
-cd terraform/environments/$ENVIRONMENT
 
-if [ ! -f "terraform.tfvars" ]; then
+# Check if tfvars exists
+if [ ! -f "terraform/environments/$ENVIRONMENT/terraform.tfvars" ]; then
     print_warning "terraform.tfvars not found, copying from example..."
-    cp terraform.tfvars.example terraform.tfvars
-    print_warning "Please update terraform.tfvars with your values and re-run"
+    cp terraform/environments/$ENVIRONMENT/terraform.tfvars.example terraform/environments/$ENVIRONMENT/terraform.tfvars
+    print_warning "Please update terraform/environments/$ENVIRONMENT/terraform.tfvars with your values and re-run"
     exit 1
 fi
+
+cd terraform
 
 echo "Initializing Terraform..."
 terraform init
 
 echo "Planning infrastructure..."
-terraform plan -out=tfplan
+terraform plan -var-file="environments/$ENVIRONMENT/terraform.tfvars" -out=tfplan
 
 read -p "Apply infrastructure changes? (yes/no): " confirm
 if [ "$confirm" != "yes" ]; then
@@ -88,7 +90,7 @@ print_status "VPC ID: $VPC_ID"
 print_status "EKS Cluster: $EKS_CLUSTER_NAME"
 print_status "ECR Repository: $ECR_REPO_URL"
 
-cd ../../..
+cd ..
 
 # Step 2: Configure kubectl
 echo ""
