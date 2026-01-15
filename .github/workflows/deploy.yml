@@ -1,0 +1,104 @@
+name: CD - Deploy to Environment
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      image_tag:
+        description: 'Docker image tag to deploy'
+        required: true
+        default: 'latest'
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  deploy:
+    name: Deploy to ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+    
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+    
+    - name: Build, tag, and push image to Amazon ECR
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: valhalla-${{ inputs.environment }}-valhalla-api
+        IMAGE_TAG: ${{ inputs.image_tag }}
+      run: |
+        cd app
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:latest .
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+        echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+      id: build-image
+    
+    - name: Update kubeconfig
+      run: |
+        aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name valhalla-${{ inputs.environment }}-cluster
+    
+    - name: Setup Kustomize
+      uses: imranismail/setup-kustomize@v2
+    
+    - name: Deploy to Kubernetes
+      run: |
+        cd k8s/overlays/${{ inputs.environment }}
+        kustomize edit set image valhalla-api=${{ steps.build-image.outputs.image }}
+        kubectl apply -k .
+    
+    - name: Wait for deployment
+      run: |
+        kubectl wait --for=condition=available --timeout=300s deployment/valhalla-api -n valhalla
+    
+    - name: Verify deployment
+      run: |
+        kubectl get pods -n valhalla
+        kubectl get svc -n valhalla
+        kubectl get ingress -n valhalla
+    
+    - name: Get ALB URL
+      id: get-url
+      run: |
+        ALB_URL=$(kubectl get ingress valhalla-api -n valhalla -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+        echo "alb_url=$ALB_URL" >> $GITHUB_OUTPUT
+        echo "Application URL: http://$ALB_URL"
+    
+    - name: Health check
+      run: |
+        sleep 30
+        curl -f http://${{ steps.get-url.outputs.alb_url }}/health || exit 1
+        echo "Health check passed"
+    
+    - name: Deployment summary
+      run: |
+        echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "- **Environment**: ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Image**: ${{ steps.build-image.outputs.image }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **ALB URL**: http://${{ steps.get-url.outputs.alb_url }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Endpoints" >> $GITHUB_STEP_SUMMARY
+        echo "- Health: http://${{ steps.get-url.outputs.alb_url }}/health" >> $GITHUB_STEP_SUMMARY
+        echo "- Status: http://${{ steps.get-url.outputs.alb_url }}/api/v1/status" >> $GITHUB_STEP_SUMMARY
+        echo "- Data: http://${{ steps.get-url.outputs.alb_url }}/api/v1/data" >> $GITHUB_STEP_SUMMARY
