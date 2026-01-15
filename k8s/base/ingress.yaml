@@ -24,8 +24,7 @@ metadata:
     alb.ingress.kubernetes.io/tags: Environment=dev,Project=valhalla
 spec:
   rules:
-  - host: api.valhalla.example.com
-    http:
+  - http:
       paths:
       - path: /
         pathType: Prefix
