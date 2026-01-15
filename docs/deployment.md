@@ -1,6 +1,6 @@
-# Valhalla Deployment Guide
+# Valhalla Routing Engine - Deployment Guide
 
-Complete step-by-step guide for deploying the Valhalla platform to AWS.
+Complete step-by-step guide for deploying Valhalla routing engine to AWS.
 
 ## Prerequisites
 
@@ -21,9 +21,6 @@ brew install kubectl
 
 # Helm
 brew install helm
-
-# Docker Desktop
-# Download from https://www.docker.com/products/docker-desktop
 
 # Kustomize
 brew install kustomize
@@ -65,12 +62,11 @@ The easiest way to deploy everything:
 ```
 
 This script will:
-1. ✅ Deploy infrastructure with Terraform
+1. ✅ Deploy infrastructure with Terraform (~15-20 minutes)
 2. ✅ Configure kubectl for EKS
 3. ✅ Install AWS Load Balancer Controller
-4. ✅ Build and push Docker image
-5. ✅ Deploy Kubernetes manifests
-6. ✅ Verify deployment
+4. ✅ Deploy Valhalla routing engine with sample data
+5. ✅ Verify deployment
 
 ### Option 2: Manual Step-by-Step Deployment
 
@@ -79,34 +75,30 @@ For learning or debugging, follow these manual steps:
 #### Step 1: Deploy Infrastructure
 
 ```bash
-cd terraform/environments/dev
-
-# Copy example configuration
-cp terraform.tfvars.example terraform.tfvars
-
-# Edit terraform.tfvars with your preferences
-vim terraform.tfvars
+cd terraform
 
 # Initialize Terraform
 terraform init
 
-# Review changes
-terraform plan
+# Review what will be created
+terraform plan -var-file="environments/dev/terraform.tfvars"
 
-# Apply infrastructure
-terraform apply
+# Apply infrastructure (takes ~15-20 minutes)
+terraform apply -var-file="environments/dev/terraform.tfvars"
 ```
 
-**Expected time**: 15-20 minutes
+**Expected time**: 15-20 minutes (EKS cluster creation is slow)
 
 **Resources created**:
-- VPC with public/private subnets
-- NAT Gateways
-- EKS cluster
-- EKS node groups (3 nodes)
-- ECR repository
+- VPC with public/private subnets across 3 AZs
+- NAT Gateway (1 for dev, 3 for prod)
+- Internet Gateway
+- EKS cluster (Kubernetes 1.28)
+- EKS managed node groups (3 t3.medium nodes)
 - Security groups
-- IAM roles
+- IAM roles and policies
+- ECR repository (unused - using official image)
+- CloudWatch log groups
 
 #### Step 2: Configure kubectl
 
@@ -123,25 +115,18 @@ kubectl get nodes
 
 You should see 3 nodes in `Ready` status.
 
-#### Step 3: Install Prerequisites in Cluster
-
-**A. Install AWS Load Balancer Controller**
+#### Step 3: Install AWS Load Balancer Controller
 
 ```bash
-# Create IAM policy
-curl -o iam_policy.json https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v2.7.0/docs/install/iam_policy.json
-
-aws iam create-policy \
-    --policy-name AWSLoadBalancerControllerIAMPolicy \
-    --policy-document file://iam_policy.json
-
-# Get VPC ID
-VPC_ID=$(terraform output -raw vpc_id)
-
-# Install using Helm
+# Add Helm repository
 helm repo add eks https://aws.github.io/eks-charts
 helm repo update
 
+# Get VPC ID and cluster name
+VPC_ID=$(cd terraform && terraform output -raw vpc_id)
+CLUSTER_NAME=$(cd terraform && terraform output -raw eks_cluster_name)
+
+# Install controller
 helm install aws-load-balancer-controller eks/aws-load-balancer-controller \
   -n kube-system \
   --set clusterName=$CLUSTER_NAME \
@@ -151,9 +136,10 @@ helm install aws-load-balancer-controller eks/aws-load-balancer-controller \
 
 # Verify installation
 kubectl get deployment -n kube-system aws-load-balancer-controller
+kubectl get pods -n kube-system -l app.kubernetes.io/name=aws-load-balancer-controller
 ```
 
-**B. Install Metrics Server (for HPA)**
+#### Step 4: Install Metrics Server (for HPA)
 
 ```bash
 kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
@@ -162,119 +148,79 @@ kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/late
 kubectl get deployment metrics-server -n kube-system
 ```
 
-#### Step 4: Build and Push Docker Image
+#### Step 5: Deploy Valhalla Routing Engine
 
 ```bash
-# Get ECR repository URL
-ECR_REPO=$(terraform output -json ecr_repository_urls | jq -r '.["valhalla-api"]')
-AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-
-# Login to ECR
-aws ecr get-login-password --region us-east-1 | \
-  docker login --username AWS --password-stdin \
-  $AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com
-
-# Build image
-cd ../../../../app
-docker build -t valhalla-api:latest .
-
-# Tag and push
-docker tag valhalla-api:latest $ECR_REPO:latest
-docker tag valhalla-api:latest $ECR_REPO:dev-$(git rev-parse --short HEAD)
-docker push $ECR_REPO:latest
-docker push $ECR_REPO:dev-$(git rev-parse --short HEAD)
-
-cd ..
-```
-
-#### Step 5: Update Kubernetes Manifests
-
-```bash
-# Update kustomization with your ECR URL
-sed -i '' "s|<AWS_ACCOUNT_ID>|$AWS_ACCOUNT_ID|g" k8s/overlays/dev/kustomization.yaml
-```
-
-#### Step 6: Deploy to Kubernetes
-
-```bash
-# Preview what will be applied
+# Preview manifests
 kubectl kustomize k8s/overlays/dev
 
-# Apply manifests
+# Apply manifests (creates namespace, PVC, deployment, service, ingress, HPA)
 kubectl apply -k k8s/overlays/dev
 
 # Watch deployment progress
 kubectl get pods -n valhalla -w
 ```
 
-Wait until all pods show `Running` status and `3/3` ready.
+**What happens:**
+1. Namespace created
+2. 50GB PersistentVolume provisioned (EBS gp3)
+3. Init container downloads Utrecht map data (~50MB)
+4. Valhalla pods start (2 replicas for dev)
+5. Service exposes port 8002
+6. Ingress creates Application Load Balancer (~2-3 minutes)
 
-#### Step 7: Verify Deployment
+Wait until all pods show `Running` status and `2/2` ready.
+
+#### Step 6: Verify Deployment
 
 ```bash
 # Check all resources
 kubectl get all -n valhalla
 
+# Check PVC
+kubectl get pvc -n valhalla
+
 # Check pod logs
 kubectl logs -n valhalla -l app=valhalla-api --tail=50
 
+# Check init container logs (map download)
+POD=$(kubectl get pods -n valhalla -l app=valhalla-api -o jsonpath='{.items[0].metadata.name}')
+kubectl logs -n valhalla $POD -c download-tiles
+
 # Check ingress
-kubectl get ingress -n valhalla
+kubectl describe ingress valhalla-api -n valhalla
 
 # Get ALB URL (wait 2-3 minutes for provisioning)
 ALB_URL=$(kubectl get ingress valhalla-api -n valhalla -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-echo "Application URL: http://$ALB_URL"
+echo "Valhalla URL: http://$ALB_URL"
 ```
 
-#### Step 8: Test Application
+#### Step 7: Test Valhalla Routing Engine
 
 ```bash
 # Health check
-curl http://$ALB_URL/health
+curl http://$ALB_URL/status
 
-# Application status
-curl http://$ALB_URL/api/v1/status
+# Get a route (Utrecht coordinates)
+curl http://$ALB_URL/route \
+  --data '{
+    "locations": [
+      {"lat": 52.0907, "lon": 5.1214},
+      {"lat": 52.0938, "lon": 5.1182}
+    ],
+    "costing": "auto",
+    "directions_options": {"units": "kilometers"}
+  }' \
+  -H "Content-Type: application/json"
 
-# Get data
-curl http://$ALB_URL/api/v1/data
-
-# Prometheus metrics
-curl http://$ALB_URL/metrics
-```
-
-## Local Testing (Without AWS)
-
-To test the application locally before deploying:
-
-```bash
-cd app
-
-# Install dependencies
-npm install
-
-# Run tests
-npm test
-
-# Run locally
-npm run dev
-
-# In another terminal
-curl http://localhost:3000/health
-curl http://localhost:3000/api/v1/status
-curl http://localhost:3000/api/v1/data
-```
-
-### Test with Docker locally
-
-```bash
-# Build image
-docker build -t valhalla-api:local .
-
-# Run container
-docker run -p 3000:3000 -e NODE_ENV=production valhalla-api:local
-
-# Test
-curl http://localhost:3000/health
+# Get isochrone (10 and 20 minute drive times)
+curl http://$ALB_URL/isochrone \
+  --data '{
+    "locations": [{"lat": 52.0907, "lon": 5.1214}],
+    "costing": "auto",
+    "contours": [{"time": 10}, {"time": 20}]
+  }' \
+  -H "Content-Type: application/json"
 ```
 
 ## Monitoring Deployment
@@ -282,17 +228,24 @@ curl http://localhost:3000/health
 ### Watch Pods
 
 ```bash
+# Watch pods come up
 kubectl get pods -n valhalla -w
+
+# Describe a pod
+kubectl describe pod <pod-name> -n valhalla
 ```
 
 ### View Logs
 
 ```bash
-# All pods
+# All Valhalla pods
 kubectl logs -n valhalla -l app=valhalla-api -f --tail=100
 
-# Specific pod
-kubectl logs -n valhalla valhalla-api-xxxxx -f
+# Specific pod - Valhalla container
+kubectl logs -n valhalla <pod-name> -c valhalla -f
+
+# Init container (map download)
+kubectl logs -n valhalla <pod-name> -c download-tiles
 ```
 
 ### Check HPA
@@ -303,12 +256,22 @@ kubectl get hpa -n valhalla -w
 
 # Pod metrics
 kubectl top pods -n valhalla
+
+# Node metrics
+kubectl top nodes
 ```
 
-### Check Ingress
+### Check Ingress and ALB
 
 ```bash
+# Ingress details
 kubectl describe ingress valhalla-api -n valhalla
+
+# Get ALB URL
+kubectl get ingress valhalla-api -n valhalla -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+
+# Check ALB in AWS Console
+aws elbv2 describe-load-balancers --query "LoadBalancers[?contains(LoadBalancerName, 'valhalla')]"
 ```
 
 ## Troubleshooting
@@ -316,45 +279,72 @@ kubectl describe ingress valhalla-api -n valhalla
 ### Pods Not Starting
 
 ```bash
+# Check pod status
+kubectl get pods -n valhalla
+
 # Describe pod to see events
 kubectl describe pod <pod-name> -n valhalla
 
-# Check if image exists in ECR
-aws ecr describe-images --repository-name valhalla-dev-valhalla-api --region us-east-1
+# Check init container logs
+kubectl logs <pod-name> -n valhalla -c download-tiles
+
+# Check Valhalla container logs
+kubectl logs <pod-name> -n valhalla -c valhalla
 ```
 
-### Image Pull Errors
+**Common issues:**
+- PVC not binding: Check storage class `kubectl get sc`
+- Image pull errors: Verify internet connectivity from nodes
+- Map download fails: Check init container logs
+
+### PVC Issues
 
 ```bash
-# Verify ECR login
-aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com
+# Check PVC status
+kubectl get pvc -n valhalla
 
-# Check node IAM permissions
-kubectl describe node | grep ProviderID
+# Describe PVC
+kubectl describe pvc valhalla-data -n valhalla
+
+# Check PersistentVolume
+kubectl get pv
+
+# Check storage class
+kubectl get sc
 ```
 
 ### ALB Not Created
 
 ```bash
 # Check ALB controller logs
-kubectl logs -n kube-system -l app.kubernetes.io/name=aws-load-balancer-controller
+kubectl logs -n kube-system -l app.kubernetes.io/name=aws-load-balancer-controller --tail=100
 
 # Verify ingress annotations
 kubectl get ingress valhalla-api -n valhalla -o yaml
+
+# Check AWS events
+aws elbv2 describe-target-health --target-group-arn <arn>
 ```
 
-### Health Checks Failing
+### Routing Requests Failing
 
 ```bash
-# Check pod readiness
+# Check if pods are ready
 kubectl get pods -n valhalla
 
-# View application logs
-kubectl logs -n valhalla -l app=valhalla-api --tail=100
+# Test from within cluster
+kubectl run -it --rm debug --image=alpine --restart=Never -- sh
+apk add curl
+curl http://valhalla-api.valhalla.svc.cluster.local/status
 
-# Test health endpoint directly from pod
-kubectl exec -n valhalla <pod-name> -- curl localhost:3000/health
+# Check service endpoints
+kubectl get endpoints valhalla-api -n valhalla
 ```
+
+**Common issues:**
+- Coordinates outside map coverage (currently only Utrecht)
+- Invalid JSON in request
+- Pod not ready (check readiness probe)
 
 ## Scaling
 
@@ -368,38 +358,43 @@ kubectl scale deployment valhalla-api -n valhalla --replicas=5
 kubectl get pods -n valhalla
 ```
 
-### Update Configuration
+### Auto-scaling (HPA)
+
+HPA is configured to scale based on:
+- CPU usage > 70%
+- Memory usage > 80%
 
 ```bash
-# Edit ConfigMap
-kubectl edit configmap valhalla-api-config -n valhalla
+# View HPA status
+kubectl get hpa -n valhalla
 
-# Restart deployment to pick up changes
-kubectl rollout restart deployment valhalla-api -n valhalla
+# Describe HPA
+kubectl describe hpa valhalla-api -n valhalla
 ```
+
+### Update Configuration
+
+Map data is stored in PVC and persists across deployments. To change map region:
+
+1. Delete existing PVC: `kubectl delete pvc valhalla-data -n valhalla`
+2. Update init container in `k8s/base/deployment.yaml` to download new region
+3. Redeploy: `kubectl apply -k k8s/overlays/dev`
 
 ## Updates and Rollbacks
 
-### Deploy New Version
+### Update Valhalla Version
 
 ```bash
-# Build and push new image
-docker build -t valhalla-api:v1.1.0 app/
-docker tag valhalla-api:v1.1.0 $ECR_REPO:v1.1.0
-docker push $ECR_REPO:v1.1.0
-
-# Update kustomization
-cd k8s/overlays/dev
-kustomize edit set image valhalla-api=$ECR_REPO:v1.1.0
-
-# Apply
-kubectl apply -k .
+# Update to specific version
+kubectl set image deployment/valhalla-api \
+  valhalla=ghcr.io/gis-ops/docker-valhalla/valhalla:v3.2.0 \
+  -n valhalla
 
 # Watch rollout
 kubectl rollout status deployment/valhalla-api -n valhalla
 ```
 
-### Rollback
+### Rollback Deployment
 
 ```bash
 # View history
@@ -412,67 +407,128 @@ kubectl rollout undo deployment/valhalla-api -n valhalla
 kubectl rollout undo deployment/valhalla-api -n valhalla --to-revision=2
 ```
 
+### Update Resources
+
+```bash
+# Edit deployment
+kubectl edit deployment valhalla-api -n valhalla
+
+# Or update via kustomize
+vim k8s/overlays/dev/deployment-patch.yaml
+kubectl apply -k k8s/overlays/dev
+```
+
 ## Cleanup
 
 ### Delete Kubernetes Resources
 
 ```bash
+# Delete all Valhalla resources
 kubectl delete -k k8s/overlays/dev
+
+# Or delete namespace (removes everything)
+kubectl delete namespace valhalla
 ```
 
 ### Destroy Infrastructure
 
 ```bash
-cd terraform/environments/dev
-terraform destroy
+cd terraform
+
+# Preview destruction
+terraform plan -destroy -var-file="environments/dev/terraform.tfvars"
+
+# Destroy all AWS resources
+terraform destroy -var-file="environments/dev/terraform.tfvars"
 ```
 
-**Warning**: This will delete all AWS resources including the EKS cluster, VPC, and ECR images.
+**Warning**: This will permanently delete:
+- EKS cluster and all workloads
+- VPC and networking
+- Load balancers
+- EBS volumes (map data will be lost)
+- CloudWatch logs
 
 ## Cost Optimization
 
 ### Dev Environment
 
-- Use single NAT Gateway: ~$35/month (configured by default)
-- Use spot instances for node groups (recommended for dev)
-- Scale down when not in use:
+To reduce costs:
 
 ```bash
-# Scale to 0 replicas
+# Scale down when not in use
 kubectl scale deployment valhalla-api -n valhalla --replicas=0
 
 # Scale back up
-kubectl scale deployment valhalla-api -n valhalla --replicas=3
+kubectl scale deployment valhalla-api -n valhalla --replicas=2
+
+# Or delete entirely and redeploy when needed
+kubectl delete -k k8s/overlays/dev
 ```
 
 ### Estimated Costs
 
-**Dev Environment** (minimal):
-- EKS cluster: $72/month
+**Dev Environment** (~$400/month):
+- EKS cluster control plane: $72/month
 - EC2 nodes (3 × t3.medium): ~$90/month
 - NAT Gateway (1): ~$35/month
 - ALB: ~$20/month
-- **Total**: ~$217/month
+- EBS storage (50GB + node volumes): ~$20/month
+- Data transfer: ~$20/month
 
-**Production** (HA):
+**Production** (~$1,500/month):
 - EKS cluster: $72/month
 - EC2 nodes (6 × t3.large): ~$360/month
-- NAT Gateways (3): ~$105/month
+- NAT Gateways (3 for HA): ~$105/month
 - ALB: ~$20/month
-- **Total**: ~$557/month
+- EBS storage (200GB): ~$40/month
+- Data transfer: ~$100/month
+
+**Cost Reduction Tips:**
+- Use Spot instances for dev (save 70%)
+- Single NAT Gateway for dev (save $70/month)
+- Smaller map regions (save storage costs)
+- Auto-shutdown dev environment nights/weekends
+
+## Production Deployment
+
+For production:
+
+1. Use separate VPC: `terraform.tfvars` with `environment = "prod"`
+2. Set `single_nat_gateway = false` for HA
+3. Increase node count: `node_group_min_size = 6`
+4. Use larger instances: `t3.large` or `c5.xlarge`
+5. Set up DNS with Route 53
+6. Configure SSL certificate in ACM
+7. Enable WAF for security
+8. Set up monitoring and alerting
+9. Configure backup for PVC
+10. Implement disaster recovery plan
 
 ## Next Steps
 
-1. ✅ Set up custom domain and SSL certificate in ACM
-2. ✅ Configure Route 53 for DNS
-3. ✅ Set up monitoring and alerting
-4. ✅ Configure backup and disaster recovery
-5. ✅ Implement CI/CD with GitHub Actions
+After successful deployment:
+
+1. **Custom Map Data**: See [Valhalla Routing Guide](valhalla-routing.md)
+2. **Monitoring**: Set up Prometheus/Grafana
+3. **CI/CD**: Configure GitHub Actions workflows
+4. **DNS**: Point custom domain to ALB
+5. **SSL**: Configure HTTPS with ACM certificate
+6. **Security**: Implement network policies
+7. **Backup**: Snapshot PVC with map data
 
 ## Support
 
-For issues or questions:
-1. Check application logs: `kubectl logs -n valhalla -l app=valhalla-api`
-2. Review Kubernetes events: `kubectl get events -n valhalla`
+For issues:
+1. Check pod logs: `kubectl logs -n valhalla -l app=valhalla-api`
+2. Check events: `kubectl get events -n valhalla --sort-by='.lastTimestamp'`
 3. Verify AWS resources in console
-4. Check this documentation's troubleshooting section
+4. Review [Valhalla documentation](https://valhalla.readthedocs.io/)
+5. Check [troubleshooting guide](valhalla-routing.md#troubleshooting)
+
+## References
+
+- [Valhalla Documentation](https://valhalla.readthedocs.io/)
+- [Docker Valhalla](https://github.com/gis-ops/docker-valhalla)
+- [EKS Best Practices](https://aws.github.io/aws-eks-best-practices/)
+- [Kubernetes Documentation](https://kubernetes.io/docs/)

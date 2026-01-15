@@ -1,193 +1,284 @@
-# Getting Started with Valhalla
+# Valhalla Platform - Quick Start Guide
 
-This guide will help you set up and deploy the Valhalla platform from scratch.
+This guide helps you get up and running with the Valhalla routing engine on AWS in under 30 minutes.
 
-## Prerequisites
+## What You'll Deploy
 
-### Required Tools
+- **Valhalla Routing Engine**: Open-source routing with OSM data
+- **AWS EKS**: Managed Kubernetes cluster
+- **High Availability**: Multi-AZ deployment
+- **Auto-scaling**: Based on CPU/memory metrics
+- **Production-ready**: Security, monitoring, and best practices
 
-1. **Git** - Version control
-2. **Node.js 18+** - For running the application
-3. **Docker Desktop** - For containerization
-4. **Terraform 1.5+** - For infrastructure provisioning
-5. **kubectl** - Kubernetes command-line tool
-6. **AWS CLI v2** - AWS command-line interface
+## Prerequisites (5 minutes)
 
-### AWS Account Setup
-
-1. Create an AWS account (if you don't have one)
-2. Create an IAM user with appropriate permissions
-3. Configure AWS CLI:
-   ```bash
-   aws configure
-   ```
-
-### GitHub Setup
-
-1. Fork or clone the repository
-2. Set up repository secrets for GitHub Actions
-
-## Step-by-Step Setup
-
-### 1. Clone the Repository
+### 1. Install Tools
 
 ```bash
-git clone <your-repo-url>
+# macOS
+brew install terraform kubectl helm kustomize awscli
+
+# Verify installations
+terraform version  # Should be >= 1.5.0
+kubectl version --client
+helm version
+aws --version
+```
+
+### 2. Configure AWS
+
+```bash
+# Set up AWS credentials
+aws configure
+
+# Verify access
+aws sts get-caller-identity
+```
+
+You should see your AWS account information.
+
+## Deployment (20 minutes)
+
+### Method 1: Automated (Recommended)
+
+```bash
+# Clone or navigate to project
 cd valhalla-project
+
+# Run deployment script
+./scripts/deploy.sh dev
 ```
 
-### 2. Test the Application Locally
+The script will:
+1. ✅ Deploy AWS infrastructure (VPC, EKS, Security Groups)
+2. ✅ Configure kubectl
+3. ✅ Install AWS Load Balancer Controller
+4. ✅ Deploy Valhalla with sample map data
+5. ✅ Verify everything works
+
+**Total time**: ~20 minutes (EKS cluster creation is slowest part)
+
+### Method 2: Manual Steps
+
+If you prefer step-by-step control:
 
 ```bash
-cd app
-npm install
-npm test
-npm run dev
-```
-
-Visit `http://localhost:3000/health` to verify the app is running.
-
-### 3. Build and Test Docker Image
-
-```bash
-cd app
-docker build -t valhalla-api:local .
-docker run -p 3000:3000 valhalla-api:local
-```
-
-### 4. Set Up AWS Infrastructure
-
-```bash
-cd terraform/environments/dev
-
-# Initialize Terraform
+# 1. Deploy infrastructure
+cd terraform
 terraform init
+terraform apply -var-file="environments/dev/terraform.tfvars"
 
-# Review the plan
-terraform plan
+# 2. Configure kubectl
+aws eks update-kubeconfig --region us-east-1 --name $(terraform output -raw eks_cluster_name)
 
-# Apply infrastructure (confirm when prompted)
-terraform apply
-```
+# 3. Install ALB controller
+helm repo add eks https://aws.github.io/eks-charts
+helm install aws-load-balancer-controller eks/aws-load-balancer-controller \
+  -n kube-system \
+  --set clusterName=$(terraform output -raw eks_cluster_name) \
+  --set serviceAccount.create=true
 
-This will create:
-- VPC with public/private subnets
-- EKS cluster
-- ECR repository
-- Security groups
-- IAM roles
-
-**Note**: This step will incur AWS costs. Review the [cost analysis](cost-analysis.md) first.
-
-### 5. Configure kubectl
-
-```bash
-# Update kubeconfig for EKS cluster
-aws eks update-kubeconfig \
-  --region us-east-1 \
-  --name valhalla-dev-cluster
-
-# Verify connection
-kubectl get nodes
-```
-
-### 6. Deploy to Kubernetes
-
-```bash
-# Deploy the application
+# 4. Deploy Valhalla
 kubectl apply -k k8s/overlays/dev
+kubectl wait --for=condition=available --timeout=300s deployment/valhalla-api -n valhalla
 
-# Check deployment status
-kubectl get pods -n valhalla
-kubectl get services -n valhalla
+# 5. Get ALB URL
 kubectl get ingress -n valhalla
 ```
 
-### 7. Set Up CI/CD
+## Test Your Deployment (2 minutes)
 
-1. Add GitHub Secrets:
-   - `AWS_ACCESS_KEY_ID`
-   - `AWS_SECRET_ACCESS_KEY`
-   - `AWS_REGION`
-   - `ECR_REPOSITORY`
-   - `EKS_CLUSTER_NAME`
+```bash
+# Get the Application Load Balancer URL
+ALB_URL=$(kubectl get ingress valhalla-api -n valhalla -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
 
-2. Push code to trigger the pipeline:
-   ```bash
-   git add .
-   git commit -m "Initial deployment"
-   git push origin main
-   ```
+# Test health endpoint
+curl http://$ALB_URL/status
 
-### 8. Verify Deployment
+# Get a route (Utrecht, Netherlands coordinates)
+curl http://$ALB_URL/route \
+  --data '{
+    "locations": [
+      {"lat": 52.0907, "lon": 5.1214},
+      {"lat": 52.0938, "lon": 5.1182}
+    ],
+    "costing": "auto"
+  }' \
+  -H "Content-Type: application/json"
+```
+
+You should get a JSON response with turn-by-turn directions!
+
+## What Was Deployed
+
+### AWS Infrastructure
+- **VPC**: 10.0.0.0/16 across 3 availability zones
+- **EKS Cluster**: Kubernetes 1.28 with managed control plane
+- **Worker Nodes**: 3 × t3.medium instances
+- **Load Balancer**: Application Load Balancer with HTTPS support
+- **Storage**: 50GB EBS volume for map data
+- **Security**: Security groups, IAM roles, encryption
+
+### Kubernetes Resources
+- **Namespace**: `valhalla`
+- **Deployment**: 2 Valhalla pods with auto-scaling
+- **Service**: ClusterIP exposing port 8002
+- **Ingress**: ALB configuration for external access
+- **PVC**: 50GB persistent volume for map tiles
+- **HPA**: Auto-scaling based on CPU/memory
+
+### Sample Map Data
+- **Region**: Utrecht, Netherlands
+- **Size**: ~50MB compressed
+- **Coverage**: City of Utrecht and surroundings
+
+## Common Tasks
+
+### View Logs
+
+```bash
+# All Valhalla pods
+kubectl logs -n valhalla -l app=valhalla-api -f
+
+# Specific pod
+kubectl logs -n valhalla <pod-name> -c valhalla
+```
+
+### Scale Manually
+
+```bash
+# Increase replicas
+kubectl scale deployment valhalla-api -n valhalla --replicas=5
+
+# Check status
+kubectl get pods -n valhalla
+```
+
+### Check Auto-scaling
+
+```bash
+# View HPA status
+kubectl get hpa -n valhalla
+
+# Pod metrics
+kubectl top pods -n valhalla
+```
+
+### Update Valhalla
+
+```bash
+# Update to new version
+kubectl set image deployment/valhalla-api \
+  valhalla=ghcr.io/gis-ops/docker-valhalla/valhalla:v3.2.0 \
+  -n valhalla
+
+# Watch rollout
+kubectl rollout status deployment/valhalla-api -n valhalla
+```
+
+## Troubleshooting
+
+### Pods Not Running
 
 ```bash
 # Check pod status
 kubectl get pods -n valhalla
 
-# View logs
-kubectl logs -f deployment/valhalla-api -n valhalla
-
-# Get the load balancer URL
-kubectl get ingress -n valhalla
-```
-
-## Next Steps
-
-- Review [Architecture Documentation](architecture.md)
-- Set up [Monitoring](observability.md)
-- Configure [Alerting](observability.md#alerting)
-- Review [Security Best Practices](security.md)
-- Read [Incident Response Playbook](incident-response.md)
-
-## Troubleshooting
-
-### Issue: EKS cluster not accessible
-
-```bash
-# Verify AWS credentials
-aws sts get-caller-identity
-
-# Update kubeconfig
-aws eks update-kubeconfig --region us-east-1 --name valhalla-dev-cluster
-```
-
-### Issue: Pods not starting
-
-```bash
-# Describe pod for errors
+# Describe pod
 kubectl describe pod <pod-name> -n valhalla
 
-# Check logs
-kubectl logs <pod-name> -n valhalla
+# Check init container (map download)
+kubectl logs <pod-name> -n valhalla -c download-tiles
 ```
 
-### Issue: Cannot access application
+### Can't Access Valhalla
 
 ```bash
 # Check ingress
 kubectl get ingress -n valhalla
 
-# Verify ALB is created
-aws elbv2 describe-load-balancers
+# Check ALB controller
+kubectl logs -n kube-system -l app.kubernetes.io/name=aws-load-balancer-controller
+
+# Verify service endpoints
+kubectl get endpoints valhalla-api -n valhalla
 ```
 
-## Clean Up
+### Routing Errors
 
-To avoid ongoing AWS charges:
+Make sure coordinates are within map coverage (currently Utrecht, Netherlands).
+
+**Utrecht bounds:**
+- Latitude: 52.0 - 52.2
+- Longitude: 5.0 - 5.2
+
+## Cost Estimate
+
+**Dev environment** (what you just deployed):
+- ~$400/month with full-time operation
+- ~$150/month if scaled down when not in use
+
+**Main costs:**
+- EKS cluster: $72/month (control plane)
+- EC2 instances: $90/month (3 nodes)
+- NAT Gateway: $35/month
+- Load Balancer: $20/month
+- Storage & data transfer: ~$40/month
+
+**Cost saving tip**: Scale to 0 replicas when not using:
+```bash
+kubectl scale deployment valhalla-api -n valhalla --replicas=0
+```
+
+## Cleanup
+
+To avoid ongoing charges:
 
 ```bash
 # Delete Kubernetes resources
 kubectl delete -k k8s/overlays/dev
 
 # Destroy infrastructure
-cd terraform/environments/dev
-terraform destroy
+cd terraform
+terraform destroy -var-file="environments/dev/terraform.tfvars"
 ```
 
-## Support
+**Warning**: This deletes everything including map data.
 
-For issues or questions, please refer to:
-- [Documentation](../README.md#documentation)
-- [Incident Response](incident-response.md)
-- [Runbooks](runbooks/)
+## Next Steps
+
+1. **Custom Map Data**: [Load different regions](valhalla-routing.md#using-custom-regions)
+2. **Production Setup**: [Deploy to prod environment](deployment.md#production-deployment)
+3. **Monitoring**: Set up Prometheus and Grafana
+4. **SSL/DNS**: Configure custom domain with HTTPS
+5. **CI/CD**: Set up automated deployments
+
+## Need Help?
+
+- **Detailed Deployment**: See [deployment.md](deployment.md)
+- **Valhalla Specifics**: See [valhalla-routing.md](valhalla-routing.md)
+- **Architecture**: See [architecture.md](architecture.md)
+- **Terraform**: See [terraform/README.md](../terraform/README.md)
+- **Kubernetes**: See [k8s/README.md](../k8s/README.md)
+
+## API Examples
+
+Once deployed, try these:
+
+```bash
+# Health check
+curl http://$ALB_URL/status
+
+# Route (driving)
+curl http://$ALB_URL/route --data '{"locations":[{"lat":52.09,"lon":5.12},{"lat":52.10,"lon":5.11}],"costing":"auto"}' -H "Content-Type: application/json"
+
+# Route (cycling)
+curl http://$ALB_URL/route --data '{"locations":[{"lat":52.09,"lon":5.12},{"lat":52.10,"lon":5.11}],"costing":"bicycle"}' -H "Content-Type: application/json"
+
+# Isochrone (10min drive time)
+curl http://$ALB_URL/isochrone --data '{"locations":[{"lat":52.09,"lon":5.12}],"costing":"auto","contours":[{"time":10}]}' -H "Content-Type: application/json"
+```
+
+---
+
+**Congratulations!** 🎉 You now have a production-ready Valhalla routing engine running on AWS!
