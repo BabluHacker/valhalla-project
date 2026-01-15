@@ -1,0 +1,65 @@
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn
+dist/
+build/
+*.log
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl
+terraform.tfvars
+*.tfvars
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# AWS
+.aws/
+credentials
+
+# Kubernetes
+*.kubeconfig
+kubeconfig
+
+# Secrets
+secrets/
+*.pem
+*.key
+*.crt
+
+# Testing
+coverage/
+.nyc_output/
+
+# Docker
+# (dockerignore files should be tracked)
+
+# CI/CD
+.github/workflows/secrets.yml
+
+# Misc
+*.bak
+*.tmp
+.cache/
