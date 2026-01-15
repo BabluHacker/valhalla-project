@@ -1,0 +1,15 @@
+environment         = "dev"
+aws_region          = "us-east-1"
+project_name        = "valhalla"
+vpc_cidr            = "10.0.0.0/16"
+availability_zones  = ["us-east-1a", "us-east-1b", "us-east-1c"]
+
+# Cost optimization: Use single NAT Gateway for dev
+single_nat_gateway  = true
+enable_nat_gateway  = true
+
+tags = {
+  Team        = "DevOps"
+  CostCenter  = "Engineering"
+  Compliance  = "None"
+}
