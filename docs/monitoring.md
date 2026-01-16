@@ -564,51 +564,6 @@ kubectl port-forward -n monitoring svc/prometheus-kube-prometheus-prometheus 909
 
 ---
 
-## Next Steps
-
-### Immediate (Production Readiness)
-1. ✅ Health checks configured
-2. ✅ Metrics endpoints available
-3. ✅ CloudWatch logging enabled
-4. → Set up CloudWatch alarms
-5. → Create basic dashboards
-
-### Short-term (1-2 weeks)
-1. Install Prometheus + Grafana stack
-2. Configure alert rules
-3. Create custom dashboards
-4. Set up PagerDuty/Slack integration
-5. Document runbooks
-
-### Long-term (1-3 months)
-1. Implement distributed tracing
-2. Set up log aggregation pipeline
-3. Create SLO/SLI tracking
-4. Automated anomaly detection
-5. Cost optimization based on metrics
-
----
-
-## Monitoring Costs
-
-**CloudWatch (Current):**
-- Logs: ~$0.50/GB ingested
-- Metrics: ~$0.30/metric/month
-- Alarms: $0.10/alarm/month
-- **Estimated:** $50-100/month
-
-**Prometheus + Grafana (Self-hosted):**
-- EC2/EKS resources: ~$100-200/month
-- Storage: ~$20/month
-- **Estimated:** $120-220/month
-
-**Managed Prometheus (AMP):**
-- Metric samples: $0.30/million samples
-- Query: $0.01/million samples
-- **Estimated:** $80-150/month
-
----
-
 ## Support & Documentation
 
 **AWS Documentation:**
