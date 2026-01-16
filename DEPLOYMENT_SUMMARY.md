@@ -282,7 +282,6 @@ The only remaining item is exposing it publicly via LoadBalancer or Ingress, whi
 
 ---
 
-**Project Repository**: `/Users/mehedi/Documents/eclever/valhalla-project`
 
 **Documentation**:
 - Architecture: `docs/architecture.md`
